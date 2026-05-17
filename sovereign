@@ -132,7 +132,13 @@ function do_uninstall() {
     [[ "$confirm" != "y" ]] && exit 0
 
     log "Uninstalling $pkg..."
-    cd "$target_dir" && podman compose --env-file "$ENV_FILE" down
+    local down_args=""
+    
+    read -p "Remove persistent volumes associated with $pkg? (y/N): " rm_volumes
+    [[ "$rm_volumes" == "y" ]] && down_args="$down_args --volumes"
+    
+    # Podman compose down usually removes networks by default, but we can be explicit or just run the command
+    cd "$target_dir" && podman compose --env-file "$ENV_FILE" down $down_args
     
     read -p "Delete local recipe files for $pkg? (y/N): " cleanup
     if [[ "$cleanup" == "y" ]]; then
