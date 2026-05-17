@@ -9,9 +9,16 @@ REPO_BRANCH="${REPO_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH"
 GITHUB_API="https://api.github.com/repos/$REPO_USER/$REPO_NAME"
 
-WORK_DIR="$HOME/.sovereign"
+# Determine work directory based on user (System vs User mode)
+if [[ $EUID -eq 0 ]]; then
+    WORK_DIR="/etc/sovereign"
+    ENV_FILE="/etc/sovereign/.env"
+else
+    WORK_DIR="$HOME/.sovereign"
+    ENV_FILE="$WORK_DIR/.env"
+fi
+
 PODMAN_DIR="$WORK_DIR/podman"
-ENV_FILE="$WORK_DIR/.env"
 PLATFORM="podman"
 
 mkdir -p "$PODMAN_DIR/core" "$PODMAN_DIR/recipes"
@@ -52,7 +59,7 @@ function get_app_subdomain() {
     read -p "Enter subdomain for $app_name [default: $app_name]: " subdomain
     subdomain=${subdomain:-$app_name}
     
-    # Check for duplicates in current user's containers
+    # Check for duplicates
     if podman ps --filter "label=traefik.http.routers.${app_name}.rule" --format "{{.Labels}}" | grep -q "Host(\`$subdomain."; then
         log "\e[33mWarning: Subdomain '$subdomain' seems already used by another container.\e[0m"
         read -p "Continue anyway? (y/N): " cont
@@ -74,10 +81,8 @@ function fetch_remote_recipe() {
     curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/compose.yml" -o "$target_dir/compose.yaml" || \
     error "Failed to fetch recipe $pkg from $GITHUB_RAW"
     
-    # Fetch package.json if it exists
     curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/package.json" -o "$target_dir/package.json" 2>/dev/null
 
-    # Also fetch dynamic config if it's traefik
     if [[ "$pkg" == "core/traefik" ]]; then
         log "Fetching Traefik dynamic configuration..."
         mkdir -p "$target_dir/traefik-dynamic"
@@ -103,18 +108,16 @@ function check_required_config() {
 # --- Commands ---
 
 function do_setup() {
-    log "Starting interactive setup..."
+    log "Starting interactive setup (Mode: $([[ $EUID -eq 0 ]] && echo 'SYSTEM' || echo 'USER'))..."
     
     if [ -f "$ENV_FILE" ]; then
         read -p "An .env file already exists. Overwrite? (y/N): " overwrite
         [[ "$overwrite" != "y" ]] && exit 0
     fi
 
-    # Check for Traefik conflict early
-    if check_port_conflicts 80 443; then
-        log "\e[33mWarning: Ports 80 or 443 are already in use on this host.\e[0m"
-        log "This usually means a Traefik or another reverse proxy is already running."
-        log "You might not need to install 'core/traefik' for this user."
+    if [[ $EUID -ne 0 ]] && check_port_conflicts 80 443; then
+        log "\e[33mWarning: Ports 80 or 443 are already in use by SYSTEM.\e[0m"
+        log "You should probably NOT install Traefik in USER mode."
     fi
 
     if [ ! -f "$WORK_DIR/.env.dist" ]; then
@@ -129,13 +132,13 @@ function do_setup() {
     read -p "Enter your email for SSL (Let's Encrypt): " email
     sed -i "s|SSL_EMAIL=.*|SSL_EMAIL=$email|g" "$ENV_FILE"
 
-    log "Setup complete! Please edit $ENV_FILE for sensitive tokens."
+    log "Setup complete! Configuration stored in $ENV_FILE"
 }
 
 function do_install() {
     check_env
     local pkg=$1
-    [[ -z "$pkg" ]] && error "Usage: sovereign install <package> (e.g., traefik, immich)"
+    [[ -z "$pkg" ]] && error "Usage: sovereign install <package>"
 
     local is_core=false
     if [[ "$pkg" == "core/"* ]] || [[ "$pkg" == "traefik" ]] || [[ "$pkg" == "smtp" ]]; then
@@ -146,35 +149,54 @@ function do_install() {
         [[ "$pkg" != "recipes/"* ]] && pkg="recipes/$pkg"
     fi
 
-    # Special check for Traefik
-    if [[ "$pkg" == "core/traefik" ]]; then
-        if check_port_conflicts 80 443; then
-            log "\e[33mConflict: Ports 80/443 are already occupied.\e[0m"
-            read -p "Are you sure you want to attempt Traefik installation? (y/N): " confirm_traefik
-            [[ "$confirm_traefik" != "y" ]] && exit 0
-        fi
+    if [[ $EUID -eq 0 ]] && [[ "$is_core" == "false" ]]; then
+        log "\e[33mWarning: You are installing an APP as ROOT. This is not recommended.\e[0m"
+        read -p "Continue anyway? (y/N): " cont_root
+        [[ "$cont_root" != "y" ]] && exit 0
     fi
 
-    # Confirmation
     read -p "Are you sure you want to install/update $pkg? (y/N): " confirm
     [[ "$confirm" != "y" ]] && exit 0
 
-    # Fetch
     fetch_remote_recipe "$pkg"
     local target_dir="$WORK_DIR/$PLATFORM/$pkg"
 
-    # For non-core recipes, handle custom subdomain
     if [[ "$is_core" == "false" ]]; then
         local app_name=$(basename "$pkg")
         get_app_subdomain "$app_name" > /dev/null
     fi
 
-    # Check for missing config
     check_required_config "$target_dir"
 
-    # Install
     log "Deploying $pkg..."
     cd "$target_dir" && podman compose --env-file "$ENV_FILE" up -d
+
+    if [[ "$pkg" == "core/traefik" ]] && [[ $EUID -eq 0 ]]; then
+        do_create_systemd_service "$target_dir"
+    fi
+}
+
+function do_create_systemd_service() {
+    local target_dir=$1
+    log "Creating systemd service for Traefik..."
+    cat <<EOF | sudo tee /etc/systemd/system/sovereign-traefik.service > /dev/null
+[Unit]
+Description=Sovereign Traefik Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$target_dir
+ExecStart=/usr/bin/podman compose --env-file $ENV_FILE up
+ExecStop=/usr/bin/podman compose --env-file $ENV_FILE down
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable sovereign-traefik.service
+    log "Systemd service 'sovereign-traefik' enabled."
 }
 
 function do_uninstall() {
@@ -191,109 +213,75 @@ function do_uninstall() {
         error "Package $pkg is not installed locally."
     fi
 
-    read -p "Are you sure you want to UNINSTALL $pkg? This will stop services. (y/N): " confirm
+    read -p "Are you sure you want to UNINSTALL $pkg? (y/N): " confirm
     [[ "$confirm" != "y" ]] && exit 0
 
     log "Uninstalling $pkg..."
     local down_args=""
-    
-    read -p "Remove persistent volumes associated with $pkg? (y/N): " rm_volumes
+    read -p "Remove persistent volumes? (y/N): " rm_volumes
     [[ "$rm_volumes" == "y" ]] && down_args="$down_args --volumes"
     
-    # Podman compose down usually removes networks by default, but we can be explicit or just run the command
     cd "$target_dir" && podman compose --env-file "$ENV_FILE" down $down_args
     
-    read -p "Delete local recipe files for $pkg? (y/N): " cleanup
-    if [[ "$cleanup" == "y" ]]; then
-        rm -rf "$target_dir"
-        log "Local files for $pkg removed."
+    if [[ "$pkg" == "core/traefik" ]] && [[ $EUID -eq 0 ]]; then
+        sudo systemctl disable --now sovereign-traefik.service 2>/dev/null
+        sudo rm -f /etc/systemd/system/sovereign-traefik.service
+        sudo systemctl daemon-reload
     fi
+
+    read -p "Delete local recipe files? (y/N): " cleanup
+    [[ "$cleanup" == "y" ]] && rm -rf "$target_dir"
     
     log "$pkg has been uninstalled."
 }
 
 function do_list() {
-    log "Fetching available recipes from GitHub..."
-    if ! command -v jq &> /dev/null; then
-        error "Listing recipes requires 'jq'. Please install it (sudo apt install jq)."
-    fi
-
-    local recipes_json
-    recipes_json=$(curl -s -f "$GITHUB_API/contents/$PLATFORM/recipes?ref=$REPO_BRANCH")
-    
-    if [[ $? -ne 0 ]]; then
-        error "Failed to reach GitHub API. Make sure the repository is public and REPO_USER is correct."
-    fi
+    log "Fetching recipes from GitHub..."
+    local recipes_json=$(curl -s -f "$GITHUB_API/contents/$PLATFORM/recipes?ref=$REPO_BRANCH")
+    [[ $? -ne 0 ]] && error "Failed to reach GitHub API."
 
     echo ""
     printf "\e[1m%-20s %s\e[0m\n" "RECIPE" "DESCRIPTION"
     echo "------------------------------------------------------------"
-
     echo "$recipes_json" | jq -r '.[] | select(.type == "dir") | .name' | while read -r name; do
-        local description
-        description=$(curl -s -f "$GITHUB_RAW/$PLATFORM/recipes/$name/package.json" | jq -r '.description // empty')
-        if [[ -z "$description" ]]; then
-            description="(No description available)"
-        fi
-        printf "%-20s %s\n" "$name" "$description"
+        local description=$(curl -s -f "$GITHUB_RAW/$PLATFORM/recipes/$name/package.json" | jq -r '.description // empty')
+        printf "%-20s %s\n" "$name" "${description:-(No description)}"
     done
     echo ""
 }
 
 function do_stats() {
-    log "Server Statistics:"
+    log "Server Statistics ($(whoami)):"
     podman ps --format "table {{.Names}}\t{{.Status}}\t{{.CPUPerc}}\t{{.MemUsage}}"
 }
 
 function do_upgrade() {
-    log "Upgrading Sovereign CLI from GitHub ($REPO_USER/$REPO_NAME)..."
+    log "Upgrading Sovereign CLI..."
     local tmp_file=$(mktemp)
-    
     if curl -s -f "$GITHUB_RAW/sovereign" -o "$tmp_file"; then
-        local current_exe=$(readlink -f "$0")
         chmod 755 "$tmp_file"
-        
-        if cp "$tmp_file" "$current_exe" 2>/dev/null; then
+        if sudo cp "$tmp_file" $(readlink -f "$0"); then
             rm -f "$tmp_file"
-            log "Sovereign has been upgraded successfully!"
+            log "Upgraded successfully!"
             exit 0
-        else
-            log "Permission denied. Attempting with sudo..."
-            if sudo cp "$tmp_file" "$current_exe"; then
-                sudo chmod 755 "$current_exe"
-                rm -f "$tmp_file"
-                log "Sovereign has been upgraded successfully (with sudo)!"
-                exit 0
-            else
-                rm -f "$tmp_file"
-                error "Failed to replace the executable even with sudo."
-            fi
         fi
-    else
-        rm -f "$tmp_file"
-        error "Failed to download the latest version from $GITHUB_RAW/sovereign"
     fi
+    error "Upgrade failed."
 }
 
 function usage() {
-    echo "Sovereign CLI - GitHub Edition"
-    echo ""
-    echo "Usage: sovereign [command] [args]"
+    echo "Sovereign CLI - $([[ $EUID -eq 0 ]] && echo 'SYSTEM MODE' || echo 'USER MODE')"
     echo ""
     echo "Commands:"
-    echo "  setup            Interactive setup"
-    echo "  list             List available recipes from GitHub"
-    echo "  install <pkg>    Install a recipe (e.g., immich, traefik)"
-    echo "  uninstall <pkg>  Remove a recipe"
-    echo "  upgrade          Update Sovereign CLI to the latest version"
-    echo "  stats            System monitoring"
+    echo "  setup            Initial configuration"
+    echo "  list             List available recipes"
+    echo "  install <pkg>    Install a recipe or core service"
+    echo "  uninstall <pkg>  Remove a service"
+    echo "  upgrade          Update this CLI"
+    echo "  stats            Monitor containers"
     echo "  ps               List active services"
-    echo "  down <pkg>       Stop a service (keep config)"
-    echo "  logs <pkg>       View logs"
     echo ""
 }
-
-# --- Router ---
 
 case $1 in
     setup)       do_setup ;;
@@ -303,19 +291,7 @@ case $1 in
     uninstall)   do_uninstall "$2" ;;
     stats)       do_stats ;;
     ps)          podman ps --filter "label=com.docker.compose.project" ;;
-    down)
-        check_env
-        pkg=$2
-        [[ "$pkg" != *"/"* ]] && pkg="recipes/$pkg"
-        cd "$WORK_DIR/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" down
-        ;;
-    logs)
-        check_env
-        pkg=$2
-        [[ "$pkg" != *"/"* ]] && pkg="recipes/$pkg"
-        cd "$WORK_DIR/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" logs -f
-        ;;
-    *)
-        usage
-        ;;
+    down)        check_env; cd "$WORK_DIR/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" down ;;
+    logs)        check_env; cd "$WORK_DIR/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" logs -f ;;
+    *)           usage ;;
 esac
