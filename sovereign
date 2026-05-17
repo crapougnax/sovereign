@@ -23,7 +23,10 @@ function usage() {
 }
 
 if [ -f "$PROJECT_ROOT/.env" ]; then
-    export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
+    ENV_FILE="--env-file $PROJECT_ROOT/.env"
+else
+    ENV_FILE=""
+    echo "Warning: .env file not found. Using system environment variables."
 fi
 
 command=$1
@@ -32,28 +35,28 @@ target=$2
 case $command in
     up)
         if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose up -d
+            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE up -d
         else
             echo "Target $PLATFORM/$target not found."
         fi
         ;;
     down)
         if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose down
+            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE down
         else
             echo "Target $PLATFORM/$target not found."
         fi
         ;;
     restart)
         if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose restart
+            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE restart
         else
             echo "Target $PLATFORM/$target not found."
         fi
         ;;
     logs)
         if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose logs -f
+            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE logs -f
         else
             echo "Target $PLATFORM/$target not found."
         fi

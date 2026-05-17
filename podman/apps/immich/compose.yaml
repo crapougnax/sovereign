@@ -22,7 +22,7 @@ services:
       - traefik.http.routers.immich.rule=Host(`${SUBDOMAIN}.${DOMAIN_NAME}`)
       - traefik.http.routers.immich.entrypoints=websecure
       - traefik.http.routers.immich.tls=true
-      - traefik.http.routers.immich.tls.certresolver=myresolver
+      - traefik.http.routers.immich.tls.certresolver=${TRAEFIK_RESOLVER:-myresolver}
       - traefik.http.routers.immich.middlewares=immich
       - traefik.http.middlewares.immich.headers.SSLRedirect=true
       - traefik.http.middlewares.immich.headers.STSSeconds=315360000
