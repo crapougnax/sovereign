@@ -1,16 +1,13 @@
 # Sovereign
 
-Sovereign is an autonomous server management CLI designed to deploy and manage a complete, self-hosted infrastructure using Podman. It supports two primary deployment modes: **Personal** (User-only) and **Infrastructure** (Shared/System).
+Sovereign is an autonomous server management CLI designed to deploy and manage a complete, self-hosted infrastructure using Podman. It supports two primary deployment patterns.
 
 ## Key Features
 
-- **Multi-Mode Deployment**: 
-  - **User Mode (Rootless)**: Everything runs within a standard user's home directory. Perfect for a single-user personal server.
-  - **System Mode (Infrastructure)**: Deploy Traefik as a system-level service (managed by `root` and `systemd`) to handle global routing for multiple users on the same host.
-- **Standalone CLI**: Install once, manage everything.
-- **GitHub Backed**: Recipes are fetched dynamically from your central GitHub repository.
-- **Security First**: Optimized for rootless Podman environments.
-- **Centralized Config**: A single `.env` file manages your entire stack.
+- **Standalone CLI**: One tool to rule them all.
+- **Dynamic Recipes**: Fetches the latest configurations directly from GitHub.
+- **Rootless First**: Designed for security and non-privileged users.
+- **Smart Routing**: Automatic Traefik detection and subdomain conflict checks.
 
 ## Quick Install
 
@@ -18,30 +15,45 @@ Sovereign is an autonomous server management CLI designed to deploy and manage a
 curl -fsSL https://raw.githubusercontent.com/crapougnax/sovereign/main/install.sh | bash
 ```
 
-## Getting Started
+---
 
-### 1. Choice of Deployment Mode
+## 🏗 Choose your Architecture
 
-- **Personal Server**: Run commands as your standard user. Everything will be stored in `~/.sovereign/`.
-- **Shared Server**: Install Traefik as `root` (`sudo sovereign install traefik`) to manage ports 80/443 globally.
+### 1. Personal Server (Full User Mode)
+The easiest way for a single user. Everything (including Traefik) runs in your user space.
+- **Prerequisite**: Allow binding to ports 80/443:
+  `echo "net.ipv4.ip_unprivileged_port_start=0" | sudo tee /etc/sysctl.d/99-rootless.conf && sudo sysctl --system`
+- **Workflow**:
+  ```bash
+  sovereign setup
+  sovereign install traefik    # Installs core/traefik in your home
+  sovereign install core/smtp
+  sovereign install immich     # Or any other recipe
+  ```
 
-### 2. Basic Workflow
+### 2. Infrastructure Server (Shared/System Mode)
+More robust. Traefik is a system-level gateway, and users install their apps separately.
+- **Step A (Admin)**: Install the system gateway:
+  ```bash
+  sudo sovereign setup
+  sudo sovereign install traefik  # Creates a systemd service
+  ```
+- **Step B (Users)**: Install personal apps:
+  ```bash
+  sovereign setup
+  sovereign install immich
+  ```
 
-1. **Setup**: Run `sovereign setup` to initialize your configuration.
-2. **Configure**: Edit your `.env` (in `~/.sovereign/` or `/etc/sovereign/`) to add your API tokens.
-3. **Deploy Core**: 
-   ```bash
-   # System mode (Infrastructure)
-   sudo sovereign install traefik
-   
-   # User mode (Personal)
-   sovereign install core/smtp
-   ```
-4. **Add Apps**:
-   ```bash
-   sovereign install immich
-   sovereign install nextcloud
-   ```
+---
+
+## Commands
+
+- `sovereign setup`: Interactive assistant to configure your domain and email.
+- `sovereign list`: Explore available recipes on GitHub.
+- `sovereign install <pkg>`: Deploy a new service (interactive).
+- `sovereign uninstall <pkg>`: Cleanly remove a service and its data.
+- `sovereign stats`: Monitor your server's health.
+- `sovereign upgrade`: Self-update the CLI to the latest version.
 
 ## License
 

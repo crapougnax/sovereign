@@ -9,13 +9,15 @@ REPO_BRANCH="${REPO_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH"
 GITHUB_API="https://api.github.com/repos/$REPO_USER/$REPO_NAME"
 
-# Determine work directory based on user (System vs User mode)
+# Determine work directory and socket based on user (System vs User mode)
 if [[ $EUID -eq 0 ]]; then
     WORK_DIR="/etc/sovereign"
     ENV_FILE="/etc/sovereign/.env"
+    export PODMAN_SOCK="/run/podman/podman.sock"
 else
     WORK_DIR="$HOME/.sovereign"
     ENV_FILE="$WORK_DIR/.env"
+    export PODMAN_SOCK="/run/user/$UID/podman/podman.sock"
 fi
 
 PODMAN_DIR="$WORK_DIR/podman"
@@ -168,6 +170,13 @@ function do_install() {
 
     check_required_config "$target_dir"
 
+    # Ensure Podman socket is active
+    if [[ $EUID -eq 0 ]]; then
+        systemctl enable --now podman.socket &>/dev/null
+    else
+        systemctl --user enable --now podman.socket &>/dev/null
+    fi
+
     log "Deploying $pkg..."
     cd "$target_dir" && podman compose --env-file "$ENV_FILE" up -d
 
@@ -213,7 +222,7 @@ function do_uninstall() {
         error "Package $pkg is not installed locally."
     fi
 
-    read -p "Are you sure you want to UNINSTALL $pkg? (y/N): " confirm
+    read -p "Are you sure you want to UNINSTALL $pkg? This will stop services. (y/N): " confirm
     [[ "$confirm" != "y" ]] && exit 0
 
     log "Uninstalling $pkg..."

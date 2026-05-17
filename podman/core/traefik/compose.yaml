@@ -6,7 +6,7 @@ services:
     restart: always
     network_mode: host
     volumes:
-      - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
+      - ${PODMAN_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
       - ./traefik-dynamic:/etc/traefik/dynamic
     environment:
