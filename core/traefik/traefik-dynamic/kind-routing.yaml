@@ -1,0 +1,19 @@
+http:
+  routers:
+    kind-router:
+      rule: "HostRegexp(`^[a-z0-9-]+\\.apps\\.quatrain\\.dev$`)"
+      entryPoints:
+        - websecure
+      service: kind-service
+      tls:
+        certResolver: dnsresolver
+        domains:
+          - main: "apps.quatrain.dev"
+            sans:
+              - "*.apps.quatrain.dev"
+
+  services:
+    kind-service:
+      loadBalancer:
+        servers:
+          - url: "http://10.89.0.1:8080"

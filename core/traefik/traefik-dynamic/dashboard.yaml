@@ -1,0 +1,17 @@
+http:
+  middlewares:
+    auth-dashboard:
+      basicAuth:
+        users:
+          - "crapougnax:{SHA}XI9zAwdNKuyMTq6Ip1ubyPmvjb0="
+
+  routers:
+    dashboard:
+      rule: Host(`pl.quatrain.com`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
+      service: api@internal
+      middlewares:
+        - auth-dashboard
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: myresolver
