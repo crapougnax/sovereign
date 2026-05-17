@@ -1,68 +1,111 @@
 #!/bin/bash
 
-# sovereign - Server Management CLI
+# sovereign - Autonomous Server Management CLI
 
 PROJECT_ROOT=$(dirname "$(readlink -f "$0")")
-PLATFORM="podman" # Default platform
+PLATFORM="podman"
+ENV_FILE="$PROJECT_ROOT/.env"
+DIST_FILE="$PROJECT_ROOT/.env.dist"
 
-function usage() {
-    echo "Usage: sovereign [command] [target]"
-    echo ""
-    echo "Commands:"
-    echo "  up [target]      Start a service (core or app)"
-    echo "  down [target]    Stop a service"
-    echo "  restart [target] Restart a service"
-    echo "  ps               List running services"
-    echo "  logs [target]    Show logs for a service"
-    echo ""
-    echo "Targets (for Podman):"
-    echo "  core/traefik"
-    echo "  core/smtp"
-    echo "  apps/immich"
-    echo "  ..."
+# --- Utils ---
+
+function log() { echo -e "\e[32m[sovereign]\e[0m $1"; }
+function error() { echo -e "\e[31m[error]\e[0m $1"; exit 1; }
+
+function check_env() {
+    if [ ! -f "$ENV_FILE" ]; then
+        error "Configuration file (.env) not found. Please run './sovereign setup' first."
+    fi
 }
 
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    ENV_FILE="--env-file $PROJECT_ROOT/.env"
-else
-    ENV_FILE=""
-    echo "Warning: .env file not found. Using system environment variables."
-fi
+# --- Commands ---
 
-command=$1
-target=$2
+function do_setup() {
+    log "Starting interactive setup..."
+    
+    if [ -f "$ENV_FILE" ]; then
+        read -p "An .env file already exists. Overwrite? (y/N): " overwrite
+        [[ "$overwrite" != "y" ]] && exit 0
+    fi
 
-case $command in
-    up)
-        if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE up -d
-        else
-            echo "Target $PLATFORM/$target not found."
-        fi
-        ;;
+    cp "$DIST_FILE" "$ENV_FILE"
+
+    read -p "Enter your domain name (e.g., apps.example.com): " domain
+    sed -i "s|DOMAIN_NAME=.*|DOMAIN_NAME=$domain|g" "$ENV_FILE"
+
+    read -p "Enter your email for SSL (Let's Encrypt): " email
+    sed -i "s|SSL_EMAIL=.*|SSL_EMAIL=$email|g" "$ENV_FILE"
+
+    read -p "Enter base data directory [/data]: " datadir
+    datadir=${datadir:-/data}
+    mkdir -p "$datadir"
+    # Note: For this script, we assume app-specific dirs are subdirs of this
+    # We can add more specific logic if needed
+    
+    log "Setup complete! Please edit $ENV_FILE for sensitive tokens (Cloudflare, SMTP)."
+}
+
+function do_install() {
+    check_env
+    local pkg=$1
+    [[ -z "$pkg" ]] && error "Usage: sovereign install <package_path> (e.g., core/traefik, apps/immich)"
+
+    if [ -d "$PROJECT_ROOT/$PLATFORM/$pkg" ]; then
+        log "Installing $pkg..."
+        cd "$PROJECT_ROOT/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" up -d
+    else
+        error "Package $pkg not found in $PLATFORM/."
+    fi
+}
+
+function do_stats() {
+    log "Server Statistics:"
+    echo "--- Containers ---"
+    podman ps --format "table {{.Names}}\t{{.Status}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+    echo ""
+    echo "--- System Load ---"
+    uptime
+    echo ""
+    echo "--- Disk Usage (Data) ---"
+    df -h | grep "/data" || df -h /
+}
+
+function do_init_system() {
+    log "Installing sovereign to /usr/local/bin..."
+    sudo ln -sf "$PROJECT_ROOT/sovereign" /usr/local/bin/sovereign
+    log "You can now use 'sovereign' from anywhere."
+}
+
+function usage() {
+    echo "Usage: sovereign [command] [args]"
+    echo ""
+    echo "Commands:"
+    echo "  setup            Interactive setup to create .env"
+    echo "  install <pkg>    Install a package (core/traefik, apps/immich...)"
+    echo "  stats            Show server and container statistics"
+    echo "  up <pkg>         Alias for install"
+    echo "  down <pkg>       Stop a package"
+    echo "  ps               List all Sovereign containers"
+    echo "  logs <pkg>       Show logs"
+    echo "  init-system      Link 'sovereign' to /usr/local/bin"
+    echo ""
+}
+
+# --- Router ---
+
+case $1 in
+    setup)       do_setup ;;
+    install|up)  do_install "$2" ;;
+    stats)       do_stats ;;
+    init-system) do_init_system ;;
+    ps)          podman ps --filter "label=com.docker.compose.project" ;;
     down)
-        if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE down
-        else
-            echo "Target $PLATFORM/$target not found."
-        fi
-        ;;
-    restart)
-        if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE restart
-        else
-            echo "Target $PLATFORM/$target not found."
-        fi
+        check_env
+        cd "$PROJECT_ROOT/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" down
         ;;
     logs)
-        if [ -d "$PROJECT_ROOT/$PLATFORM/$target" ]; then
-            cd "$PROJECT_ROOT/$PLATFORM/$target" && podman compose $ENV_FILE logs -f
-        else
-            echo "Target $PLATFORM/$target not found."
-        fi
-        ;;
-    ps)
-        podman ps --filter "label=com.docker.compose.project"
+        check_env
+        cd "$PROJECT_ROOT/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" logs -f
         ;;
     *)
         usage
