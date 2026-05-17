@@ -7,6 +7,7 @@ REPO_USER="crapougnax"
 REPO_NAME="sovereign"
 REPO_BRANCH="master"
 GITHUB_RAW="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH"
+GITHUB_API="https://api.github.com/repos/$REPO_USER/$REPO_NAME"
 
 WORK_DIR="$HOME/.sovereign"
 PODMAN_DIR="$WORK_DIR/podman"
@@ -90,10 +91,35 @@ function do_install() {
 }
 
 function do_list() {
-    log "Available recipes (from GitHub):"
-    # This requires the GitHub API or a simple index file. 
-    # For now, let's suggest the user checks the repo or we fetch a simple index if you create one.
-    echo "Check https://github.com/$REPO_USER/$REPO_NAME/tree/$REPO_BRANCH/$PLATFORM/recipes"
+    log "Fetching available recipes from GitHub..."
+    
+    # Check for jq
+    if ! command -v jq &> /dev/null; then
+        error "Listing recipes requires 'jq'. Please install it (sudo apt install jq)."
+    fi
+
+    local recipes_json
+    recipes_json=$(curl -s -f "$GITHUB_API/contents/$PLATFORM/recipes?ref=$REPO_BRANCH")
+    
+    if [[ $? -ne 0 ]]; then
+        error "Failed to reach GitHub API. Make sure the repository is public and REPO_USER is correct."
+    fi
+
+    echo ""
+    printf "\e[1m%-20s %s\e[0m\n" "RECIPE" "DESCRIPTION"
+    echo "------------------------------------------------------------"
+
+    # Iterate through directories
+    echo "$recipes_json" | jq -r '.[] | select(.type == "dir") | .name' | while read -r name; do
+        # Fetch the first line of README.md
+        local description
+        description=$(curl -s -f "$GITHUB_RAW/$PLATFORM/recipes/$name/README.md" | head -n 1 | sed 's/^# //')
+        if [[ -z "$description" ]]; then
+            description="(No description available)"
+        fi
+        printf "%-20s %s\n" "$name" "$description"
+    done
+    echo ""
 }
 
 function do_stats() {
@@ -108,7 +134,7 @@ function usage() {
     echo ""
     echo "Commands:"
     echo "  setup            Interactive setup"
-    echo "  list             List available recipes"
+    echo "  list             List available recipes from GitHub"
     echo "  install <pkg>    Install a recipe (e.g., immich, core/traefik)"
     echo "  stats            System monitoring"
     echo "  ps               List active services"

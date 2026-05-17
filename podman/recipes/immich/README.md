@@ -1,0 +1,1 @@
+# Immich - High performance self-hosted photo and video management solution.
