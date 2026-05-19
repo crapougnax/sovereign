@@ -13,7 +13,7 @@ Tycho is an autonomous server management CLI designed to deploy and manage a com
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/crapougnax/tycho/main/install.sh | bash
+curl -fsSL https://tycho.cc/install.sh | bash
 ```
 
 ---
