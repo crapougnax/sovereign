@@ -22,7 +22,7 @@ curl -fsSL https://tycho.cc/install.sh | bash
 
 ### 1. Personal Server (Full User Mode)
 The easiest way for a single user. Everything (including Traefik) runs in your user space.
-- **Prerequisite**: Allow binding to ports 80/443:
+- **Prerequisite**: Allow binding to ports 80/443 (configured automatically by the interactive installer, or manually via):
   `echo "net.ipv4.ip_unprivileged_port_start=0" | sudo tee /etc/sysctl.d/99-rootless.conf && sudo sysctl --system`
 - **Workflow**:
   ```bash
