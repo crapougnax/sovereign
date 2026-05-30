@@ -76,6 +76,34 @@ install_podman() {
     esac
 }
 
+# Install jq using system package manager
+install_jq() {
+    local pm=$1
+    echo -e "${BLUE}Installing jq via $pm...${NC}"
+    case "$pm" in
+        apt)
+            sudo apt-get update
+            sudo apt-get install -y jq
+            ;;
+        dnf)
+            sudo dnf install -y jq
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm jq
+            ;;
+        zypper)
+            sudo zypper install -y jq
+            ;;
+        brew)
+            brew install jq
+            ;;
+        *)
+            echo -e "${RED}Unknown package manager. Please install jq manually.${NC}"
+            exit 1
+            ;;
+    esac
+}
+
 # Read input from the controlling terminal if available, with a fallback for non-interactive environments.
 # This prevents reading lines of the script itself when running the installer via piping (e.g., curl | bash).
 # Arguments:
@@ -122,9 +150,11 @@ fi
 echo ""
 
 # -------------------------------------------------------------
-# 2. Check / Install Podman
+# 2. Check / Install System Dependencies (Podman & jq)
 # -------------------------------------------------------------
-echo -e "${BOLD}2. Checking Podman installation...${NC}"
+echo -e "${BOLD}2. Checking system dependencies...${NC}"
+
+# Check Podman
 if command -v podman &>/dev/null; then
     PODMAN_VERSION=$(podman --version)
     echo -e "${GREEN}Podman is already installed: $PODMAN_VERSION${NC}"
@@ -134,24 +164,47 @@ else
     INSTALL_PODMAN_REQUIRED=true
 fi
 
-if [[ "$INSTALL_PODMAN_REQUIRED" == "true" ]]; then
-    echo "   Would you like the installer to attempt to install Podman?"
-    echo "   1) Yes, install system-wide (requires sudo/root)"
-    echo "   2) No, skip Podman installation"
-    safe_read "Choice [1-2, default: 2]: " podman_choice 2
+# Check jq
+if command -v jq &>/dev/null; then
+    echo -e "${GREEN}jq is already installed.${NC}"
+    INSTALL_JQ_REQUIRED=false
+else
+    echo -e "${YELLOW}jq (JSON processor) is required but was not found on your system.${NC}"
+    INSTALL_JQ_REQUIRED=true
+fi
 
-    if [[ "$podman_choice" -eq 1 ]]; then
+echo ""
+
+if [[ "$INSTALL_PODMAN_REQUIRED" == "true" || "$INSTALL_JQ_REQUIRED" == "true" ]]; then
+    echo -e "Would you like the installer to attempt to install missing dependencies?"
+    if [[ "$INSTALL_PODMAN_REQUIRED" == "true" ]]; then
+        echo "   - Podman"
+    fi
+    if [[ "$INSTALL_JQ_REQUIRED" == "true" ]]; then
+        echo "   - jq"
+    fi
+    echo "   1) Yes, install missing dependencies (requires sudo/root)"
+    echo "   2) No, skip dependency installation"
+    safe_read "Choice [1-2, default: 2]: " dep_choice 2
+
+    if [[ "$dep_choice" -eq 1 ]]; then
         PM=$(detect_package_manager)
         if [[ "$PM" == "unknown" ]]; then
-            echo -e "${RED}Could not automatically detect your package manager. Please install Podman manually.${NC}"
+            echo -e "${RED}Could not automatically detect your package manager. Please install missing dependencies manually.${NC}"
             exit 1
         fi
-        install_podman "$PM"
+        
+        if [[ "$INSTALL_PODMAN_REQUIRED" == "true" ]]; then
+            install_podman "$PM"
+        fi
+        if [[ "$INSTALL_JQ_REQUIRED" == "true" ]]; then
+            install_jq "$PM"
+        fi
     else
-        echo -e "${YELLOW}Skipping Podman installation. Please make sure it is installed before running Tycho.${NC}"
+        echo -e "${YELLOW}Skipping dependency installation. Please make sure both Podman and jq are installed before running Tycho.${NC}"
     fi
+    echo ""
 fi
-echo ""
 
 # -------------------------------------------------------------
 # 3. Configure Rootless/User optimization for Podman (Linux only)
